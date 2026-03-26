@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS Infrastructure for Python Flask App
+
+Resources:
+  # 1. The VPC (The Virtual Data Center)
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: DevSecOps-Project-VPC
+
+  # 2. Public Subnet (Where the Load Balancer lives)
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  # 3. Internet Gateway (The Front Door)
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # 4. Security Group (The Firewall)
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP access on port 80
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0  # Allows anyone in the world to reach the Load Balancer
+
+  # 5. The Application Load Balancer (The Traffic Cop)
+  MyALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: Pro-DevSecOps-ALB
+      Subnets:
+        - !Ref PublicSubnet1
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+
+  # 6. Target Group (The "Where do I send the traffic?" list)
+  MyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref MyVPC
+      HealthCheckPath: /
+      Matcher:
+        HttpCode: 200
+
+  # 7. Listener (The "Listen for incoming requests" rule)
+  MyListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref MyALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref MyTargetGroup
+  # 8. Launch Template (The "Golden Image" blueprint for your servers)
+  MyLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64}}"
+        InstanceType: t2.micro
+        IamInstanceProfile: 
+          Name: !Ref MyInstanceProfile # See below for IAM Role
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            yum install -y aws-cli ruby wget
+            cd /home/ec2-user
+            wget https://aws-codedeploy-us-east-1.s3.us-east-1.amazonaws.com/latest/install
+            chmod +x ./install
+            ./install auto
+            systemctl start codedeploy-agent
+            systemctl enable codedeploy-agent
+
+  # 9. Auto Scaling Group (The "Manager" that keeps your servers alive)
+  MyASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: [ !Ref PublicSubnet1 ]
+      LaunchTemplate:
+        LaunchTemplateId: !Ref MyLaunchTemplate
+        Version: !GetAtt MyLaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 3
+      DesiredCapacity: 1
+      TargetGroupARNs: [ !Ref MyTargetGroup ]
+
+  # 10. IAM Role (Permission for EC2 to talk to S3/CodeDeploy)
+  MyInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: [ec2.amazonaws.com]}
+            Action: ['sts:AssumeRole']
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforAWSCodeDeploy
+
+  MyInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [ !Ref MyInstanceRole ]

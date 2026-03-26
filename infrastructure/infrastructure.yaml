@@ -22,6 +22,13 @@ Resources:
       AvailabilityZone: !Select [0, !GetAZs ""]
       MapPublicIpOnLaunch: true
 
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""] # Note the '1' instead of '0'
+      MapPublicIpOnLaunch: true
   # 3. Internet Gateway (The Front Door)
   InternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -51,6 +58,7 @@ Resources:
       Name: Pro-DevSecOps-ALB
       Subnets:
         - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
       SecurityGroups:
         - !Ref ALBSecurityGroup
 
@@ -81,7 +89,7 @@ Resources:
     Properties:
       LaunchTemplateData:
         ImageId: "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64}}"
-        InstanceType: t2.micro
+        InstanceType: t3.micro
         IamInstanceProfile: 
           Name: !Ref MyInstanceProfile # See below for IAM Role
         UserData:
@@ -125,3 +133,18 @@ Resources:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles: [ !Ref MyInstanceRole ]
+  
+Outputs:
+  LoadBalancerDNSName:
+    Description: "The DNS name of the Load Balancer"
+    Value: !GetAtt MyALB.DNSName
+
+  # 11. Artifact Bucket (The "Trash Bin" for temporary build files) 
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-artifact-bucket-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+    
+ 
